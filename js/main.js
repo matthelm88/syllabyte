@@ -5,7 +5,7 @@ import { startRecording, stopRecording, isRecording, decode } from './recorder.j
 import { toMono, normalize, trim, findSlices, makeSliceBuffers } from './chopper.js';
 import { generate, vary, extend, emptyPattern, emptyStep } from './generator.js';
 import { Sequencer, playChop } from './sequencer.js';
-import { renderLoop, shareWav } from './exporter.js';
+import { renderLoop, shareWav, isMobile } from './exporter.js';
 import * as store from './storage.js';
 import * as ui from './ui.js';
 import { VOICES, renderVoice } from './voices.js';
@@ -276,7 +276,7 @@ els.exp.addEventListener('click', async () => {
   els.wavName.value = `syllabyte-${S.bpm}bpm-${Date.now() % 1000}`;
   els.wavInfo.textContent = `4 bars · ${S.bpm} BPM · .wav is added for you`;
   showNaming(true);
-  setStatus('NAME IT, THEN SAVE ↑');
+  setStatus(isMobile ? 'NAME IT, THEN SAVE ↑' : 'NAME IT, THEN SAVE ↓');
 });
 
 // select the whole name on tap so typing replaces it
@@ -289,9 +289,9 @@ els.nameSave.addEventListener('click', async () => {
   if (!S.wav) { showNaming(false); return; }
   const name = (cleanName(els.wavName.value) || `syllabyte-${S.bpm}bpm`) + '.wav';
   const r = await shareWav(S.wav, name);
-  if (r === 'cancelled') { setStatus('SHARE CANCELLED'); return; }
+  if (r === 'cancelled') { setStatus('SAVE CANCELLED'); return; }
   showNaming(false);
-  setStatus('SAVED: ' + name);
+  setStatus(r === 'downloaded' ? 'IN DOWNLOADS: ' + name : 'SAVED: ' + name);
 });
 
 /* ---------- synth voices ---------- */
@@ -320,6 +320,8 @@ function setVoice(id) {
 }
 
 els.voiceBtn.addEventListener('click', () => { unlock(); showVoices(els.voices.hidden); });
+
+if (!isMobile) els.nameSave.textContent = 'SAVE ↓'; // on a computer it saves to disk
 
 /* ---------- desktop keys: SPACE play/stop · R rec · N new · V vary ---------- */
 document.addEventListener('keydown', e => {
