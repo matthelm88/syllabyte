@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Syllabyte">
+<meta name="theme-color" content="#e9e6df">
+<title>Syllabyte</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">SYLLA<span>BYTE</span></div>
+    <div id="status">TAP REC · SAY A PHRASE</div>
+    <button id="btnVoice" class="mini">VOX: DRY</button>
+    <button id="btnExport" class="mini">WAV</button>
+  </header>
+
+  <canvas id="wave"></canvas>
+
+  <section id="steps" class="steps"></section>
+
+  <section id="pads" class="pads"></section>
+
+  <section id="voices" class="voices" hidden></section>
+
+  <section class="controls">
+    <div class="row">
+      <button id="btnRec" class="big rec">● REC</button>
+      <button id="btnPlay" class="big">▶ PLAY</button>
+      <button id="btnNew" class="big accent">⟳ NEW</button>
+    </div>
+    <div class="row">
+      <button id="btnVary">VARY</button>
+      <button id="btnLen">16 STEPS</button>
+      <button id="btnChops">AUTO CHOP</button>
+      <label class="btn" id="lblLoad">LOAD<input id="fileIn" type="file" hidden></label>
+    </div>
+    <div class="row slider">
+      <span class="lab">BPM</span>
+      <input id="bpm" type="range" min="60" max="180" value="120">
+      <span id="bpmVal" class="val">120</span>
+    </div>
+    <div class="row slider">
+      <span class="lab">CHAOS</span>
+      <input id="chaos" type="range" min="0" max="100" value="35">
+      <span id="chaosVal" class="val">35</span>
+    </div>
+    <div class="row fxrow">
+      <button class="fx" data-fx="rev">REV</button>
+      <button class="fx" data-fx="pitch">PITCH</button>
+      <button class="fx" data-fx="stutter">STUT</button>
+      <button class="fx" data-fx="crush">CRUSH</button>
+      <button class="fx" data-fx="filter">FILT</button>
+      <button class="fx" data-fx="delay">ECHO</button>
+    </div>
+  </section>
+</div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
