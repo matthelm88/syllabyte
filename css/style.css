@@ -32,19 +32,23 @@ html, body {
   flex-direction: column;
   gap: 7px;
   padding: calc(env(safe-area-inset-top) + 6px) 10px calc(env(safe-area-inset-bottom) + 8px);
+  max-width: 520px; /* phone-shaped column, centred on desktop */
+  margin: 0 auto;
 }
 
 /* header */
 header { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
 .brand { font-weight: 800; letter-spacing: 1px; font-size: 15px; }
 .brand span { color: var(--accent); }
+.brand .ver { font-size: 9px; font-weight: 400; color: var(--dim); margin-left: 4px; letter-spacing: 0; }
 #status {
   flex: 1; min-width: 0; font-size: 10px; color: var(--dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
 }
 
 /* waveform */
-#wave { flex: 0 0 12vh; width: 100%; border-radius: var(--radius); display: block; }
+/* explicit height + min-height 0: a canvas otherwise keeps a 2:1 shape and grows huge on wide screens */
+#wave { flex: 0 0 auto; height: clamp(70px, 14vh, 150px); min-height: 0; width: 100%; border-radius: var(--radius); display: block; }
 
 /* buttons */
 button, .btn {

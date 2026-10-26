@@ -321,6 +321,18 @@ function setVoice(id) {
 
 els.voiceBtn.addEventListener('click', () => { unlock(); showVoices(els.voices.hidden); });
 
+/* ---------- desktop keys: SPACE play/stop · R rec · N new · V vary ---------- */
+document.addEventListener('keydown', e => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+  const k = e.key.toLowerCase();
+  if (e.target && e.target.tagName === 'BUTTON') e.target.blur(); // stop SPACE also pressing the focused button
+  if (k === ' ') { e.preventDefault(); els.play.click(); }
+  else if (k === 'r') els.rec.click();
+  else if (k === 'n') els.nw.click();
+  else if (k === 'v') els.vary.click();
+});
+
 window.addEventListener('resize', () => ui.drawWave(els.wave, wave(), S.slices, -1));
 
 /* ---------- start-up: restore last session ---------- */
