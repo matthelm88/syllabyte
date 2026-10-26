@@ -28,6 +28,16 @@
 
   <section id="voices" class="voices" hidden></section>
 
+  <section id="naming" class="naming" hidden>
+    <label for="wavName" class="lab">NAME YOUR LOOP</label>
+    <input id="wavName" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" maxlength="60">
+    <div class="row">
+      <button id="btnNameCancel">CANCEL</button>
+      <button id="btnNameSave" class="accent">SAVE ↑</button>
+    </div>
+    <div id="wavInfo" class="info">.wav is added for you</div>
+  </section>
+
   <section class="controls">
     <div class="row">
       <button id="btnRec" class="big rec">● REC</button>

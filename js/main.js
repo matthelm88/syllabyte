@@ -37,6 +37,8 @@ const els = {
   rec: $('btnRec'), play: $('btnPlay'), nw: $('btnNew'), vary: $('btnVary'),
   len: $('btnLen'), chops: $('btnChops'), file: $('fileIn'), exp: $('btnExport'),
   voiceBtn: $('btnVoice'), voices: $('voices'),
+  naming: $('naming'), wavName: $('wavName'), wavInfo: $('wavInfo'),
+  nameSave: $('btnNameSave'), nameCancel: $('btnNameCancel'),
   bpm: $('bpm'), bpmVal: $('bpmVal'), chaos: $('chaos'), chaosVal: $('chaosVal'),
 };
 
@@ -73,8 +75,6 @@ function stop() { seq.stop(); updatePlayBtn(); }
 let saveTimer = null;
 function changed({ rebuildSteps = false } = {}) {
   S.wav = null;
-  els.exp.textContent = 'WAV';
-  els.exp.classList.remove('ready');
   if (rebuildSteps) {
     ui.buildSteps(els.steps, S.pattern, S.fx, onStepTap);
     S.playStep = -1;
@@ -253,27 +253,51 @@ document.querySelectorAll('button.fx').forEach(b => {
   });
 });
 
-// WAV: first tap renders, second tap opens the share sheet (iOS needs a fresh tap to share)
+// WAV: renders 4 bars, then asks for a name; SAVE opens the share sheet (a fresh tap, which iOS needs)
+const cleanName = t => t.replace(/\.wav$/i, '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 60);
+
+function showNaming(open) {
+  els.naming.hidden = !open;
+  els.voices.hidden = true;
+  els.voiceBtn.classList.remove('on');
+  els.pads.hidden = open;
+  els.exp.classList.toggle('on', open);
+  if (!open) els.wavName.blur();
+}
+
 els.exp.addEventListener('click', async () => {
   if (!hasPhrase()) { setStatus('RECORD A PHRASE FIRST'); return; }
-  if (S.wav) {
-    const r = await shareWav(S.wav, `syllabyte-${S.bpm}bpm-${Date.now() % 100000}.wav`);
-    setStatus(r === 'cancelled' ? 'SHARE CANCELLED' : 'WAV SAVED');
-    return;
+  if (!els.naming.hidden) { showNaming(false); return; }
+  if (!S.wav) {
+    setStatus('RENDERING 4 BARS…');
+    try { S.wav = await renderLoop(S, getCtx().sampleRate, 4); }
+    catch (e) { setStatus('EXPORT FAILED'); return; }
   }
-  setStatus('RENDERING 4 BARS…');
-  try {
-    S.wav = await renderLoop(S, getCtx().sampleRate, 4);
-    els.exp.textContent = 'SAVE ↑';
-    els.exp.classList.add('ready');
-    setStatus('READY — TAP SAVE ↑');
-  } catch (e) {
-    setStatus('EXPORT FAILED');
-  }
+  els.wavName.value = `syllabyte-${S.bpm}bpm-${Date.now() % 1000}`;
+  els.wavInfo.textContent = `4 bars · ${S.bpm} BPM · .wav is added for you`;
+  showNaming(true);
+  setStatus('NAME IT, THEN SAVE ↑');
+});
+
+// select the whole name on tap so typing replaces it
+els.wavName.addEventListener('focus', () => { try { els.wavName.select(); } catch (e) { /* ignore */ } });
+els.wavName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); els.wavName.blur(); } });
+
+els.nameCancel.addEventListener('click', () => { showNaming(false); setStatus('SAVE CANCELLED'); });
+
+els.nameSave.addEventListener('click', async () => {
+  if (!S.wav) { showNaming(false); return; }
+  const name = (cleanName(els.wavName.value) || `syllabyte-${S.bpm}bpm`) + '.wav';
+  const r = await shareWav(S.wav, name);
+  if (r === 'cancelled') { setStatus('SHARE CANCELLED'); return; }
+  showNaming(false);
+  setStatus('SAVED: ' + name);
 });
 
 /* ---------- synth voices ---------- */
 function showVoices(open) {
+  els.naming.hidden = true;
+  els.exp.classList.remove('on');
   els.voices.hidden = !open;
   els.pads.hidden = open;
   els.voiceBtn.classList.toggle('on', open);
