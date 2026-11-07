@@ -1,16 +1,9 @@
 // ui.js — draws the waveform, step lane and pads. Each chop keeps one colour everywhere.
 
-// Dark-HUD palette: all teal/cyan, just shifted in hue and brightness so chops stay tell-apart-able.
 export const COLORS = [
-  '#6fe3d8', '#4fc3e0', '#a6f7ec', '#3fa89f', '#7fd4f0', '#57dbb4', '#c4fbf4', '#46a9bd',
-  '#8ae9c9', '#3a929c', '#62c6dd', '#9ce6d2', '#4cbfa6', '#78dcf2', '#3f9f8a', '#b7efe6',
+  '#ff5a1f', '#2a7de1', '#e0a800', '#1fa774', '#d64b8a', '#7b5cd6', '#00a3a3', '#e07a1f',
+  '#5aa02c', '#c23b3b', '#3b6fc2', '#b8892b', '#2f9c8f', '#a14bc2', '#6b7d2a', '#c2603b',
 ];
-
-// read theme colours from the stylesheet so the canvas matches the CSS
-function cssVar(name, fallback) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}
 
 /* ---------- pads ---------- */
 export function buildPads(el, n, onTap) {
@@ -20,7 +13,7 @@ export function buildPads(el, n, onTap) {
     b.className = 'pad';
     if (i < n) {
       b.style.setProperty('--c', COLORS[i]);
-      b.append(String(i + 1).padStart(2, '0') + ']');
+      b.textContent = String(i + 1);
       b.addEventListener('pointerdown', e => { e.preventDefault(); onTap(i); });
     } else {
       b.classList.add('off');
@@ -96,8 +89,7 @@ function waveLayer(data, w, h, dpr) {
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.fillStyle = cssVar('--ink', '#6fe3d8');
-  g.shadowColor = g.fillStyle; g.shadowBlur = 3;
+  g.fillStyle = '#e9e6df';
   const n = data.length, mid = h / 2;
   for (let x = 0; x < w; x++) {
     const a = Math.floor(x / w * n), b = Math.max(a + 1, Math.floor((x + 1) / w * n));
@@ -119,21 +111,12 @@ export function drawWave(cv, data, slices, active) {
   }
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  g.fillStyle = cssVar('--panel', '#0c1d20');
+  g.fillStyle = '#141414';
   g.fillRect(0, 0, w, h);
-  // faint grid, like the scope in the corner of the reference
-  g.strokeStyle = cssVar('--line', '#1f4a4c');
-  g.globalAlpha = 0.5; g.lineWidth = 1;
-  g.beginPath();
-  for (let x = 0.5; x < w; x += 24) { g.moveTo(x, 0); g.lineTo(x, h); }
-  for (let y = 0.5; y < h; y += 16) { g.moveTo(0, y); g.lineTo(w, y); }
-  g.stroke();
-  g.globalAlpha = 1;
-  g.beginPath(); g.moveTo(0, h / 2 + 0.5); g.lineTo(w, h / 2 + 0.5); g.stroke();
-  g.font = '10px "Share Tech Mono", ui-monospace, Menlo, monospace';
+  g.font = '10px ui-monospace, Menlo, monospace';
 
   if (!data || !data.length) {
-    g.fillStyle = cssVar('--dim', '#3b7f7c');
+    g.fillStyle = '#777';
     g.textAlign = 'center';
     g.fillText('NO PHRASE YET', w / 2, h / 2 + 4);
     return;
@@ -142,7 +125,7 @@ export function drawWave(cv, data, slices, active) {
   const n = data.length;
   slices.forEach((s, i) => {
     const x0 = s.start / n * w, x1 = s.end / n * w;
-    g.globalAlpha = i === active ? 0.35 : 0.07;
+    g.globalAlpha = i === active ? 0.6 : 0.2;
     g.fillStyle = COLORS[i];
     g.fillRect(x0, 0, x1 - x0, h);
   });
@@ -153,6 +136,6 @@ export function drawWave(cv, data, slices, active) {
     const x0 = s.start / n * w;
     g.fillStyle = COLORS[i];
     g.fillRect(x0, 0, 1.5, h);
-    g.fillText(String(i + 1).padStart(2, '0'), x0 + 3, 11);
+    g.fillText(String(i + 1), x0 + 3, 11);
   });
 }

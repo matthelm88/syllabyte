@@ -5,7 +5,7 @@ import { startRecording, stopRecording, isRecording, decode } from './recorder.j
 import { toMono, normalize, trim, findSlices, makeSliceBuffers } from './chopper.js';
 import { generate, vary, extend, emptyPattern, emptyStep } from './generator.js';
 import { Sequencer, playChop } from './sequencer.js';
-import { renderLoop, shareWav, isMobile } from './exporter.js';
+import { renderLoop, shareWav } from './exporter.js';
 import * as store from './storage.js';
 import * as ui from './ui.js';
 import { VOICES, renderVoice } from './voices.js';
@@ -25,8 +25,7 @@ const S = {
   chopMode: 'auto',
   bpm: 120,
   chaos: 0.35,
-  fx: { rev: true, pitch: true, stutter: true, crush: false, filter: false, delay: false,
-        drive: false, verb: false, chorus: false, gate: false, tape: false, phone: false },
+  fx: { rev: true, pitch: true, stutter: true, crush: false, filter: false, delay: false },
   selPad: 0,
   playStep: -1,
   wav: null,
@@ -38,8 +37,6 @@ const els = {
   rec: $('btnRec'), play: $('btnPlay'), nw: $('btnNew'), vary: $('btnVary'),
   len: $('btnLen'), chops: $('btnChops'), file: $('fileIn'), exp: $('btnExport'),
   voiceBtn: $('btnVoice'), voices: $('voices'),
-  naming: $('naming'), wavName: $('wavName'), wavInfo: $('wavInfo'),
-  nameSave: $('btnNameSave'), nameCancel: $('btnNameCancel'),
   bpm: $('bpm'), bpmVal: $('bpmVal'), chaos: $('chaos'), chaosVal: $('chaosVal'),
 };
 
@@ -76,6 +73,8 @@ function stop() { seq.stop(); updatePlayBtn(); }
 let saveTimer = null;
 function changed({ rebuildSteps = false } = {}) {
   S.wav = null;
+  els.exp.textContent = 'WAV';
+  els.exp.classList.remove('ready');
   if (rebuildSteps) {
     ui.buildSteps(els.steps, S.pattern, S.fx, onStepTap);
     S.playStep = -1;
@@ -254,51 +253,27 @@ document.querySelectorAll('button.fx').forEach(b => {
   });
 });
 
-// WAV: renders 4 bars, then asks for a name; SAVE opens the share sheet (a fresh tap, which iOS needs)
-const cleanName = t => t.replace(/\.wav$/i, '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 60);
-
-function showNaming(open) {
-  els.naming.hidden = !open;
-  els.voices.hidden = true;
-  els.voiceBtn.classList.remove('on');
-  els.pads.hidden = open;
-  els.exp.classList.toggle('on', open);
-  if (!open) els.wavName.blur();
-}
-
+// WAV: first tap renders, second tap opens the share sheet (iOS needs a fresh tap to share)
 els.exp.addEventListener('click', async () => {
   if (!hasPhrase()) { setStatus('RECORD A PHRASE FIRST'); return; }
-  if (!els.naming.hidden) { showNaming(false); return; }
-  if (!S.wav) {
-    setStatus('RENDERING 4 BARS…');
-    try { S.wav = await renderLoop(S, getCtx().sampleRate, 4); }
-    catch (e) { setStatus('EXPORT FAILED'); return; }
+  if (S.wav) {
+    const r = await shareWav(S.wav, `syllabyte-${S.bpm}bpm-${Date.now() % 100000}.wav`);
+    setStatus(r === 'cancelled' ? 'SHARE CANCELLED' : 'WAV SAVED');
+    return;
   }
-  els.wavName.value = `syllabyte-${S.bpm}bpm-${Date.now() % 1000}`;
-  els.wavInfo.textContent = `4 bars · ${S.bpm} BPM · .wav is added for you`;
-  showNaming(true);
-  setStatus(isMobile ? 'NAME IT, THEN SAVE ↑' : 'NAME IT, THEN SAVE ↓');
-});
-
-// select the whole name on tap so typing replaces it
-els.wavName.addEventListener('focus', () => { try { els.wavName.select(); } catch (e) { /* ignore */ } });
-els.wavName.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); els.wavName.blur(); } });
-
-els.nameCancel.addEventListener('click', () => { showNaming(false); setStatus('SAVE CANCELLED'); });
-
-els.nameSave.addEventListener('click', async () => {
-  if (!S.wav) { showNaming(false); return; }
-  const name = (cleanName(els.wavName.value) || `syllabyte-${S.bpm}bpm`) + '.wav';
-  const r = await shareWav(S.wav, name);
-  if (r === 'cancelled') { setStatus('SAVE CANCELLED'); return; }
-  showNaming(false);
-  setStatus(r === 'downloaded' ? 'IN DOWNLOADS: ' + name : 'SAVED: ' + name);
+  setStatus('RENDERING 4 BARS…');
+  try {
+    S.wav = await renderLoop(S, getCtx().sampleRate, 4);
+    els.exp.textContent = 'SAVE ↑';
+    els.exp.classList.add('ready');
+    setStatus('READY — TAP SAVE ↑');
+  } catch (e) {
+    setStatus('EXPORT FAILED');
+  }
 });
 
 /* ---------- synth voices ---------- */
 function showVoices(open) {
-  els.naming.hidden = true;
-  els.exp.classList.remove('on');
   els.voices.hidden = !open;
   els.pads.hidden = open;
   els.voiceBtn.classList.toggle('on', open);
@@ -321,20 +296,6 @@ function setVoice(id) {
 }
 
 els.voiceBtn.addEventListener('click', () => { unlock(); showVoices(els.voices.hidden); });
-
-if (!isMobile) els.nameSave.textContent = 'SAVE ↓'; // on a computer it saves to disk
-
-/* ---------- desktop keys: SPACE play/stop · R rec · N new · V vary ---------- */
-document.addEventListener('keydown', e => {
-  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
-  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-  const k = e.key.toLowerCase();
-  if (e.target && e.target.tagName === 'BUTTON') e.target.blur(); // stop SPACE also pressing the focused button
-  if (k === ' ') { e.preventDefault(); els.play.click(); }
-  else if (k === 'r') els.rec.click();
-  else if (k === 'n') els.nw.click();
-  else if (k === 'v') els.vary.click();
-});
 
 window.addEventListener('resize', () => ui.drawWave(els.wave, wave(), S.slices, -1));
 
