@@ -40,16 +40,47 @@ export async function renderLoop(S, sampleRate, bars = 4) {
   return encodeWAV(await off.startRendering());
 }
 
-export async function shareWav(blob, name) {
-  const file = new File([blob], name, { type: 'audio/wav' });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: name }); return 'shared'; }
-    catch (e) { if (e.name === 'AbortError') return 'cancelled'; }
-  }
+// phones/tablets get the share sheet (Files, AudioShare…); computers save straight to disk
+export const isMobile = (() => {
+  try {
+    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)) || // iPadOS
+      matchMedia('(pointer: coarse)').matches;
+  } catch (err) { return false; }
+})();
+
+function download(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   return 'downloaded';
+}
+
+export async function shareWav(blob, name) {
+  if (!isMobile) {
+    // Chrome/Edge: pick the folder (and tweak the name) in a normal Save dialog
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: name,
+          types: [{ description: 'WAV audio', accept: { 'audio/wav': ['.wav'] } }],
+        });
+        const w = await handle.createWritable();
+        await w.write(blob);
+        await w.close();
+        return 'saved';
+      } catch (err) {
+        if (err.name === 'AbortError') return 'cancelled';
+      }
+    }
+    return download(blob, name); // Safari/Firefox: goes to your Downloads folder
+  }
+  const file = new File([blob], name, { type: 'audio/wav' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return 'shared'; }
+    catch (err) { if (err.name === 'AbortError') return 'cancelled'; }
+  }
+  return download(blob, name);
 }

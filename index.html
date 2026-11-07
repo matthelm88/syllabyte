@@ -5,16 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Syllabyte">
-<meta name="theme-color" content="#e9e6df">
+<meta name="theme-color" content="#071214">
 <title>Syllabyte</title>
-<link rel="stylesheet" href="css/style.css">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=8">
+<link rel="icon" type="image/png" href="icon-512.png?v=8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap">
+<link rel="stylesheet" href="css/style.css?v=7">
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="brand">SYLLA<span>BYTE</span></div>
+    <div class="brand">SYLLA<span>BYTE</span><small class="ver">v7</small></div>
     <div id="status">TAP REC · SAY A PHRASE</div>
     <button id="btnVoice" class="mini">VOX: DRY</button>
     <button id="btnExport" class="mini">WAV</button>
@@ -27,6 +31,16 @@
   <section id="pads" class="pads"></section>
 
   <section id="voices" class="voices" hidden></section>
+
+  <section id="naming" class="naming" hidden>
+    <label for="wavName" class="lab">NAME YOUR LOOP</label>
+    <input id="wavName" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" maxlength="60">
+    <div class="row">
+      <button id="btnNameCancel">CANCEL</button>
+      <button id="btnNameSave" class="accent">SAVE ↑</button>
+    </div>
+    <div id="wavInfo" class="info">.wav is added for you</div>
+  </section>
 
   <section class="controls">
     <div class="row">
@@ -58,8 +72,16 @@
       <button class="fx" data-fx="filter">FILT</button>
       <button class="fx" data-fx="delay">ECHO</button>
     </div>
+    <div class="row fxrow">
+      <button class="fx" data-fx="drive">DRIVE</button>
+      <button class="fx" data-fx="verb">VERB</button>
+      <button class="fx" data-fx="chorus">CHORUS</button>
+      <button class="fx" data-fx="gate">GATE</button>
+      <button class="fx" data-fx="tape">TAPE</button>
+      <button class="fx" data-fx="phone">PHONE</button>
+    </div>
   </section>
 </div>
-<script type="module" src="js/main.js"></script>
+<script type="module" src="js/main.js?v=7"></script>
 </body>
 </html>

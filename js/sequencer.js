@@ -9,7 +9,8 @@ export function holdSteps(pattern, i) {
   return L;
 }
 
-function playVoice(c, dest, buf, rate, t, d) {
+// gate: { start, period } chops the sound into on/off pulses locked to the step grid
+function playVoice(c, dest, buf, rate, t, d, gate) {
   const maxD = buf.duration / rate;
   d = Math.min(d, maxD);
   if (d < 0.015) d = Math.min(0.015, maxD);
@@ -18,11 +19,26 @@ function playVoice(c, dest, buf, rate, t, d) {
   src.buffer = buf;
   src.playbackRate.value = rate;
   const g = c.createGain();
-  const fadeOutAt = Math.max(t + 0.003, t + d - 0.008);
-  g.gain.setValueAtTime(0, t);
-  g.gain.linearRampToValueAtTime(1, t + 0.003);
-  g.gain.setValueAtTime(1, fadeOutAt);
-  g.gain.linearRampToValueAtTime(0, t + d);
+  if (gate) {
+    // on for the first half of every pulse, silent for the rest
+    const P = gate.period, on = P * 0.5, end = t + d;
+    g.gain.setValueAtTime(0, t);
+    let k = Math.floor((t - gate.start) / P + 1e-6);
+    for (; gate.start + k * P < end; k++) {
+      const a = Math.max(t, gate.start + k * P), b = Math.min(end, gate.start + k * P + on);
+      if (b - a < 0.008) continue;
+      g.gain.setValueAtTime(0, a);
+      g.gain.linearRampToValueAtTime(1, a + 0.003);
+      g.gain.setValueAtTime(1, b - 0.004);
+      g.gain.linearRampToValueAtTime(0, b);
+    }
+  } else {
+    const fadeOutAt = Math.max(t + 0.003, t + d - 0.008);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(1, t + 0.003);
+    g.gain.setValueAtTime(1, fadeOutAt);
+    g.gain.linearRampToValueAtTime(0, t + d);
+  }
   src.connect(g);
   g.connect(dest);
   src.start(t);
@@ -40,9 +56,10 @@ export function scheduleStep(c, dest, bufs, pattern, i, time, stepDur, fx) {
   const hold = holdSteps(pattern, i) * stepDur * st.len;
   const n = fx.stutter && st.stutter > 1 ? st.stutter : 1;
   const sub = Math.min(stepDur, hold) / n;
+  const gate = fx.gate ? { start: time, period: stepDur / 2 } : null; // 32nd-note trance gate
   for (let k = 0; k < n; k++) {
     const d = k < n - 1 ? sub : Math.max(sub, hold - (n - 1) * sub);
-    playVoice(c, dest, buf, rate, time + k * sub, d);
+    playVoice(c, dest, buf, rate, time + k * sub, d, gate);
   }
 }
 
