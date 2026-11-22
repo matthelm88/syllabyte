@@ -5,7 +5,8 @@ import { startRecording, stopRecording, isRecording, decode } from './recorder.j
 import { toMono, normalize, trim, findSlices, makeSliceBuffers } from './chopper.js';
 import { generate, vary, extend, emptyPattern, emptyStep } from './generator.js';
 import { Sequencer, playChop } from './sequencer.js';
-import { renderLoop, shareWav, isMobile } from './exporter.js';
+import { renderLoop, renderLoopBuffer, shareWav, shareFile, isMobile } from './exporter.js';
+import { MODES as VID_MODES, hasVideo, loadVideo, patternTime, padTime, drawAt, recordVideo, recorderType } from './video.js';
 import * as store from './storage.js';
 import * as ui from './ui.js';
 import { VOICES, renderVoice } from './voices.js';
@@ -30,6 +31,10 @@ const S = {
   selPad: 0,
   playStep: -1,
   wav: null,
+  vidMode: 'trim',   // trim | stretch | warp
+  hit: null,         // last step that played: { i, t }
+  audition: null,    // pad tapped on its own: { slice, t }
+  vidOut: null,      // recorded video waiting to be saved
 };
 
 const $ = id => document.getElementById(id);
@@ -41,6 +46,8 @@ const els = {
   naming: $('naming'), wavName: $('wavName'), wavInfo: $('wavInfo'),
   nameSave: $('btnNameSave'), nameCancel: $('btnNameCancel'),
   bpm: $('bpm'), bpmVal: $('bpmVal'), chaos: $('chaos'), chaosVal: $('chaosVal'),
+  vidBtn: $('btnVid'), vidview: $('vidview'), vidCanvas: $('vidCanvas'), vidIn: $('vidIn'),
+  lblVid: $('lblVid'), vidMode: $('btnVidMode'), mp4: $('btnMp4'),
 };
 
 const setStatus = t => { els.status.textContent = t; };
@@ -48,9 +55,10 @@ const hasPhrase = () => S.bufs.length > 0;
 const wave = () => S.voiced || S.raw;
 
 /* ---------- sequencer ---------- */
-const seq = new Sequencer(() => S, i => {
+const seq = new Sequencer(() => S, (i, t) => {
   ui.setPlayhead(els.steps, S.playStep, i);
   S.playStep = i;
+  S.hit = i >= 0 ? { i, t } : null;
   const st = i >= 0 ? S.pattern[i] : null;
   const active = st && st.slice != null ? st.slice : -1;
   ui.renderPads(els.pads, S.selPad, active);
@@ -66,6 +74,7 @@ async function play() {
   if (!hasPhrase()) { setStatus('RECORD A PHRASE FIRST'); return; }
   await unlock();
   getChain().update(S.fx, S.bpm);
+  S.audition = null;
   seq.start();
   updatePlayBtn();
 }
@@ -76,6 +85,7 @@ function stop() { seq.stop(); updatePlayBtn(); }
 let saveTimer = null;
 function changed({ rebuildSteps = false } = {}) {
   S.wav = null;
+  clearVidOut();
   if (rebuildSteps) {
     ui.buildSteps(els.steps, S.pattern, S.fx, onStepTap);
     S.playStep = -1;
@@ -89,7 +99,7 @@ function changed({ rebuildSteps = false } = {}) {
 function saveSession() {
   store.save('session', {
     chopMode: S.chopMode, pattern: S.pattern, len: S.len, voice: S.voice,
-    bpm: S.bpm, chaos: S.chaos, fx: S.fx,
+    bpm: S.bpm, chaos: S.chaos, fx: S.fx, vidMode: S.vidMode,
   });
 }
 
@@ -97,6 +107,7 @@ function renderControls() {
   els.len.textContent = S.len + ' STEPS';
   els.voiceBtn.textContent = 'VOX: ' + VOICES.find(v => v.id === S.voice).name;
   els.chops.textContent = S.chopMode === 'auto' ? 'AUTO CHOP' : S.chopMode + ' CHOPS';
+  els.vidMode.textContent = S.vidMode.toUpperCase();
   els.bpm.value = S.bpm; els.bpmVal.textContent = S.bpm;
   els.chaos.value = Math.round(S.chaos * 100); els.chaosVal.textContent = Math.round(S.chaos * 100);
   document.querySelectorAll('button.fx').forEach(b => b.classList.toggle('on', !!S.fx[b.dataset.fx]));
@@ -174,6 +185,7 @@ function onPadTap(i) {
   unlock();
   S.selPad = i;
   playChop(S.bufs, i);
+  S.audition = { slice: i, t: getCtx().currentTime };
   ui.renderPads(els.pads, S.selPad, i);
   ui.drawWave(els.wave, wave(), S.slices, i);
 }
@@ -258,6 +270,7 @@ document.querySelectorAll('button.fx').forEach(b => {
 const cleanName = t => t.replace(/\.wav$/i, '').replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').trim().slice(0, 60);
 
 function showNaming(open) {
+  hideVid();
   els.naming.hidden = !open;
   els.voices.hidden = true;
   els.voiceBtn.classList.remove('on');
@@ -297,6 +310,7 @@ els.nameSave.addEventListener('click', async () => {
 
 /* ---------- synth voices ---------- */
 function showVoices(open) {
+  hideVid();
   els.naming.hidden = true;
   els.exp.classList.remove('on');
   els.voices.hidden = !open;
@@ -324,6 +338,117 @@ els.voiceBtn.addEventListener('click', () => { unlock(); showVoices(els.voices.h
 
 if (!isMobile) els.nameSave.textContent = 'SAVE ↓'; // on a computer it saves to disk
 
+/* ---------- video (v8) ---------- */
+// The video follows the pads: whenever a pad plays, its piece of the video plays. VID shows it in the pads' place.
+const vctx = els.vidCanvas.getContext('2d');
+let vidLoop = false, lastVt = 0;
+
+function hideVid() {
+  els.vidview.hidden = true;
+  els.vidBtn.classList.remove('on');
+}
+
+function showVid(open) {
+  els.naming.hidden = true;
+  els.voices.hidden = true;
+  els.voiceBtn.classList.remove('on');
+  els.exp.classList.remove('on');
+  els.vidview.hidden = !open;
+  els.pads.hidden = open;
+  els.vidBtn.classList.toggle('on', open);
+  if (open && !vidLoop) { vidLoop = true; requestAnimationFrame(drawVid); }
+}
+
+function currentVidTime() {
+  const now = getCtx().currentTime;
+  if (seq.playing && S.hit) {
+    const vt = patternTime(S, S.vidMode, S.hit.i, Math.max(0, now - S.hit.t));
+    if (vt != null) return vt;
+  } else if (S.audition && S.bufs[S.audition.slice]) {
+    return padTime(S, S.vidMode, S.audition.slice, Math.max(0, now - S.audition.t));
+  }
+  return lastVt;
+}
+
+function drawVid() {
+  if (els.vidview.hidden) { vidLoop = false; return; }
+  if (hasPhrase() && hasVideo() && !recordingVid) lastVt = currentVidTime();
+  drawAt(vctx, els.vidCanvas.width, els.vidCanvas.height, hasVideo() ? lastVt : null);
+  if (!hasVideo()) {
+    vctx.fillStyle = '#3b7f7c'; vctx.font = '22px "Share Tech Mono", monospace'; vctx.textAlign = 'center';
+    vctx.fillText('TAP VIDEO TO LOAD ONE', els.vidCanvas.width / 2, els.vidCanvas.height / 2);
+  }
+  requestAnimationFrame(drawVid);
+}
+
+function clearVidOut() {
+  S.vidOut = null;
+  els.mp4.textContent = 'MP4';
+  els.mp4.classList.remove('ready');
+}
+
+els.vidBtn.addEventListener('click', () => { unlock(); showVid(els.vidview.hidden); });
+
+els.vidIn.addEventListener('change', async () => {
+  const f = els.vidIn.files && els.vidIn.files[0];
+  els.vidIn.value = '';
+  if (!f) return;
+  setStatus('LOADING VIDEO…');
+  try {
+    await loadVideo(f, (d, n) => setStatus(`CUTTING VIDEO ${Math.round(d / n * 100)}%`));
+  } catch (e) { setStatus("CAN'T READ THAT VIDEO"); return; }
+  els.lblVid.classList.add('has');
+  clearVidOut();
+  showVid(true);
+  setStatus(hasPhrase() ? 'VIDEO LOADED · ' + S.vidMode.toUpperCase() : 'VIDEO LOADED · NOW RECORD OR LOAD AUDIO');
+});
+
+els.vidMode.addEventListener('click', () => {
+  S.vidMode = VID_MODES[(VID_MODES.indexOf(S.vidMode) + 1) % VID_MODES.length];
+  renderControls();
+  setStatus('VIDEO: ' + ({ trim: 'TRIM · NORMAL SPEED', stretch: 'STRETCH · ONE SPEED FOR ALL', warp: 'WARP · EACH PAD ITS OWN SPEED' })[S.vidMode]);
+  changed();
+});
+
+// MP4: records 4 bars in real time (you hear it), then the button turns into SAVE ↑ — a fresh tap, which iOS needs to share
+let recordingVid = false;
+els.mp4.addEventListener('click', async () => {
+  if (recordingVid) return;
+  if (S.vidOut) {
+    const name = `syllabyte-${S.bpm}bpm-${Date.now() % 1000}.${S.vidOut.ext}`;
+    const type = S.vidOut.blob.type || 'video/mp4';
+    const r = await shareFile(S.vidOut.blob, name, type, 'Video', '.' + S.vidOut.ext);
+    if (r === 'cancelled') { setStatus('SAVE CANCELLED'); return; }
+    setStatus(r === 'downloaded' ? 'IN DOWNLOADS: ' + name : 'SAVED: ' + name);
+    return;
+  }
+  if (!hasPhrase()) { setStatus('RECORD A PHRASE FIRST'); return; }
+  if (!hasVideo()) { setStatus('LOAD A VIDEO FIRST'); return; }
+  if (!recorderType()) { setStatus("THIS BROWSER CAN'T RECORD VIDEO"); return; }
+  await unlock();
+  stop();
+  showVid(true);
+  recordingVid = true;
+  els.mp4.classList.add('on');
+  try {
+    setStatus('RENDERING AUDIO…');
+    const buf = await renderLoopBuffer(S, getCtx().sampleRate, 4);
+    const out = await recordVideo(S, S.vidMode, getCtx(), buf, (p, vt) => {
+      setStatus(`RECORDING VIDEO ${Math.round(p * 100)}%`);
+      if (vt != null) lastVt = vt;
+    });
+    S.vidOut = out;
+    els.mp4.textContent = 'SAVE ↑';
+    els.mp4.classList.add('ready');
+    setStatus(`VIDEO READY · TAP SAVE ↑ (${out.ext.toUpperCase()})`);
+  } catch (e) {
+    setStatus('VIDEO EXPORT FAILED');
+  } finally {
+    recordingVid = false;
+    els.mp4.classList.remove('on');
+  }
+});
+
 /* ---------- desktop keys: SPACE play/stop · R rec · N new · V vary ---------- */
 document.addEventListener('keydown', e => {
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
@@ -348,6 +473,7 @@ window.addEventListener('resize', () => ui.drawWave(els.wave, wave(), S.slices, 
     Object.assign(S, {
       chopMode: sess.chopMode ?? S.chopMode, len: sess.len ?? S.len,
       voice: VOICES.some(v => v.id === sess.voice) ? sess.voice : 'dry', bpm: sess.bpm ?? S.bpm, chaos: sess.chaos ?? S.chaos, fx: { ...S.fx, ...(sess.fx || {}) },
+      vidMode: VID_MODES.includes(sess.vidMode) ? sess.vidMode : 'trim',
     });
   }
   renderControls();

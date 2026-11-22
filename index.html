@@ -13,12 +13,12 @@
 <link rel="icon" type="image/png" href="icon-512.png?v=8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap">
-<link rel="stylesheet" href="css/style.css?v=7">
+<link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
 <div id="app">
   <header>
-    <div class="brand">SYLLA<span>BYTE</span><small class="ver">v7</small></div>
+    <div class="brand">SYLLA<span>BYTE</span><small class="ver">v8</small></div>
     <div id="status">TAP REC · SAY A PHRASE</div>
     <button id="btnVoice" class="mini">VOX: DRY</button>
     <button id="btnExport" class="mini">WAV</button>
@@ -31,6 +31,8 @@
   <section id="pads" class="pads"></section>
 
   <section id="voices" class="voices" hidden></section>
+
+  <section id="vidview" class="vidview" hidden><canvas id="vidCanvas" width="360" height="640"></canvas></section>
 
   <section id="naming" class="naming" hidden>
     <label for="wavName" class="lab">NAME YOUR LOOP</label>
@@ -53,6 +55,12 @@
       <button id="btnLen">16 STEPS</button>
       <button id="btnChops">AUTO CHOP</button>
       <label class="btn" id="lblLoad">LOAD<input id="fileIn" type="file" hidden></label>
+    </div>
+    <div class="row vidrow">
+      <label class="btn" id="lblVid">VIDEO<input id="vidIn" type="file" accept="video/*" hidden></label>
+      <button id="btnVid">VIEW</button>
+      <button id="btnVidMode">TRIM</button>
+      <button id="btnMp4">MP4</button>
     </div>
     <div class="row slider">
       <span class="lab">BPM</span>
@@ -82,6 +90,6 @@
     </div>
   </section>
 </div>
-<script type="module" src="js/main.js?v=7"></script>
+<script type="module" src="js/main.js?v=8"></script>
 </body>
 </html>

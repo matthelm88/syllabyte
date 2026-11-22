@@ -119,7 +119,7 @@ export class Sequencer {
     const c = getCtx();
     let last = null;
     while (this.queue.length && this.queue[0].t <= c.currentTime) last = this.queue.shift();
-    if (last) this.onStep(last.i);
+    if (last) this.onStep(last.i, last.t);
     requestAnimationFrame(() => this.frame());
   }
 }

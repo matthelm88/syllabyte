@@ -1,4 +1,4 @@
-// exporter.js — renders 4 bars of the loop (with FX) to a WAV and hands it to the share sheet.
+// exporter.js — renders 4 bars of the loop (with FX) to a WAV (or feeds video export) and hands files to the share sheet.
 
 import { buildChain } from './audio.js';
 import { scheduleStep } from './sequencer.js';
@@ -27,7 +27,8 @@ export function encodeWAV(buffer) {
   return new Blob([ab], { type: 'audio/wav' });
 }
 
-export async function renderLoop(S, sampleRate, bars = 4) {
+// the rendered loop as an AudioBuffer (used by WAV and video export)
+export async function renderLoopBuffer(S, sampleRate, bars = 4) {
   const stepDur = 60 / S.bpm / 4;
   const steps = Math.max(S.pattern.length, 16 * bars);
   const off = new OfflineAudioContext(2, Math.ceil(steps * stepDur * sampleRate), sampleRate);
@@ -37,7 +38,11 @@ export async function renderLoop(S, sampleRate, bars = 4) {
   for (let k = 0; k < steps; k++) {
     scheduleStep(off, chain.input, S.bufs, S.pattern, k % S.pattern.length, k * stepDur, stepDur, S.fx);
   }
-  return encodeWAV(await off.startRendering());
+  return off.startRendering();
+}
+
+export async function renderLoop(S, sampleRate, bars = 4) {
+  return encodeWAV(await renderLoopBuffer(S, sampleRate, bars));
 }
 
 // phones/tablets get the share sheet (Files, AudioShare…); computers save straight to disk
@@ -58,14 +63,18 @@ function download(blob, name) {
   return 'downloaded';
 }
 
-export async function shareWav(blob, name) {
+export function shareWav(blob, name) {
+  return shareFile(blob, name, 'audio/wav', 'WAV audio', '.wav');
+}
+
+export async function shareFile(blob, name, type, desc, ext) {
   if (!isMobile) {
     // Chrome/Edge: pick the folder (and tweak the name) in a normal Save dialog
     if (window.showSaveFilePicker) {
       try {
         const handle = await window.showSaveFilePicker({
           suggestedName: name,
-          types: [{ description: 'WAV audio', accept: { 'audio/wav': ['.wav'] } }],
+          types: [{ description: desc, accept: { [type]: [ext] } }],
         });
         const w = await handle.createWritable();
         await w.write(blob);
@@ -77,7 +86,7 @@ export async function shareWav(blob, name) {
     }
     return download(blob, name); // Safari/Firefox: goes to your Downloads folder
   }
-  const file = new File([blob], name, { type: 'audio/wav' });
+  const file = new File([blob], name, { type });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
     try { await navigator.share({ files: [file], title: name }); return 'shared'; }
     catch (err) { if (err.name === 'AbortError') return 'cancelled'; }
