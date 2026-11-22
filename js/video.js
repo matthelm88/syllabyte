@@ -22,11 +22,24 @@ export const V = {
 
 export const hasVideo = () => V.frames.length > 0;
 
-const once = (el, ev) => new Promise((res, rej) => {
-  const ok = () => { off(); res(); }, bad = () => { off(); rej(new Error(ev + ' failed')); };
-  const off = () => { el.removeEventListener(ev, ok); el.removeEventListener('error', bad); };
+// wait for an event, giving up after ms (rejects with a short code shown in the status line)
+const once = (el, ev, ms = 8000, code = ev.toUpperCase()) => new Promise((res, rej) => {
+  let timer;
+  const off = () => { clearTimeout(timer); el.removeEventListener(ev, ok); el.removeEventListener('error', bad); };
+  const ok = () => { off(); res(); };
+  const bad = () => { off(); rej(new Error('CAN\'T DECODE')); };
   el.addEventListener(ev, ok); el.addEventListener('error', bad);
+  timer = setTimeout(() => { off(); rej(new Error('NO ' + code)); }, ms);
 });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// after a seek, wait until the new frame is actually on the video (Safari can lag behind 'seeked')
+function framePainted(v, ms = 50) {
+  return new Promise(res => {
+    const t = setTimeout(res, ms);
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(() => { clearTimeout(t); res(); });
+  });
+}
 
 // draw src into ctx, cropped to fill w×h (like object-fit: cover)
 function drawCover(ctx, src, sw, sh, w, h) {
@@ -35,37 +48,105 @@ function drawCover(ctx, src, sw, sh, w, h) {
   ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
+// true when a frame came out empty (all one colour) — what Safari gives when it hasn't decoded anything
+function isBlank(cx) {
+  const d = cx.getImageData(0, 0, FRAME_W, FRAME_H).data;
+  let min = 255, max = 0;
+  for (let i = 0; i < d.length; i += 4 * 211) {
+    const y = d[i] + d[i + 1] + d[i + 2];
+    if (y < min) min = y; if (y > max) max = y;
+  }
+  return max - min < 6;
+}
+
+const snap = cv => (window.createImageBitmap ? createImageBitmap(cv) : Promise.resolve(cloneCanvas(cv)));
+
+// backup method: jump to each frame time and grab it
+async function grabBySeeking(v, cx, cv, dur, fps, total, onProgress) {
+  const frames = [];
+  let blanks = 0;
+  for (let k = 0; k < total; k++) {
+    v.currentTime = Math.min(dur - 0.001, (k + 0.5) / fps);
+    await once(v, 'seeked', 3000, 'SEEK');
+    await framePainted(v);
+    cx.fillStyle = '#000'; cx.fillRect(0, 0, FRAME_W, FRAME_H);
+    drawCover(cx, v, v.videoWidth, v.videoHeight, FRAME_W, FRAME_H);
+    if (k < 6 && isBlank(cx)) blanks++;
+    if (k === 5 && blanks === 6) throw new Error('BLANK');   // Safari isn't giving frames this way
+    frames.push(await snap(cv));
+    onProgress(k + 1, total);
+  }
+  return frames;
+}
+
+// main method: play the video (muted) and grab frames as they go by; takes as long as the clip
+async function grabByPlaying(v, cx, cv, dur, fps, total, onProgress) {
+  const slots = new Array(total).fill(null);
+  v.currentTime = 0;
+  try { await once(v, 'seeked', 2000, 'SEEK'); } catch (e) { /* already at 0 */ }
+  v.loop = false;
+  await v.play();
+  await new Promise(res => {
+    const give = setTimeout(res, (dur + 5) * 1000);
+    const grab = async (now, meta) => {
+      const t = meta && meta.mediaTime != null ? meta.mediaTime : v.currentTime;
+      const k = Math.min(total - 1, Math.floor(t * fps));
+      if (!slots[k]) {
+        cx.fillStyle = '#000'; cx.fillRect(0, 0, FRAME_W, FRAME_H);
+        drawCover(cx, v, v.videoWidth, v.videoHeight, FRAME_W, FRAME_H);
+        slots[k] = await snap(cv);
+        onProgress(slots.filter(Boolean).length, total);
+      }
+      if (v.ended || v.currentTime >= dur - 0.02) { clearTimeout(give); res(); return; }
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(grab); else requestAnimationFrame(() => grab());
+    };
+    v.addEventListener('ended', () => { clearTimeout(give); res(); }, { once: true });
+    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(grab); else requestAnimationFrame(() => grab());
+  });
+  v.pause();
+  // fill any gaps with the nearest earlier frame
+  let last = slots.find(Boolean);
+  if (!last) throw new Error('NO FRAMES');
+  return slots.map(f => (last = f || last));
+}
+
 // loads a video file and cuts it into frames; onProgress(done, total)
 export async function loadVideo(file, onProgress = () => {}) {
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
-  v.muted = true; v.playsInline = true; v.preload = 'auto';
-  v.setAttribute('playsinline', ''); v.setAttribute('muted', '');
+  v.muted = true; v.defaultMuted = true; v.playsInline = true; v.preload = 'auto';
+  v.setAttribute('playsinline', ''); v.setAttribute('webkit-playsinline', ''); v.setAttribute('muted', '');
+  // iOS only decodes video that's on the page, so park it there almost invisibly
+  Object.assign(v.style, { position: 'fixed', left: '0', top: '0', width: '4px', height: '4px', opacity: '0.01', pointerEvents: 'none', zIndex: '-1' });
+  document.body.appendChild(v);
   v.src = url;
+  v.load();
   try {
-    await once(v, 'loadeddata');
-    try { await v.play(); v.pause(); } catch (e) { /* iOS sometimes needs this to show frames; fine if refused */ }
+    await once(v, 'loadedmetadata', 15000, 'METADATA');
+    try { await v.play(); await sleep(120); } catch (e) { /* muted inline play is allowed on iOS; fine if not */ }
+    v.pause();
     const dur = v.duration;
-    if (!isFinite(dur) || dur <= 0) throw new Error('no duration');
+    if (!isFinite(dur) || dur <= 0) throw new Error('NO LENGTH');
+    if (!v.videoWidth || !v.videoHeight) throw new Error('NO PICTURE');
     const fps = Math.max(4, Math.min(MAX_FPS, Math.floor(MAX_FRAMES / dur)));
     const total = Math.max(1, Math.floor(dur * fps));
     const cv = document.createElement('canvas');
     cv.width = FRAME_W; cv.height = FRAME_H;
-    const cx = cv.getContext('2d');
-    const frames = [];
-    for (let k = 0; k < total; k++) {
-      const t = Math.min(dur - 0.001, (k + 0.5) / fps);
-      v.currentTime = t;
-      await once(v, 'seeked');
-      cx.fillStyle = '#000'; cx.fillRect(0, 0, FRAME_W, FRAME_H);
-      drawCover(cx, v, v.videoWidth, v.videoHeight, FRAME_W, FRAME_H);
-      frames.push(window.createImageBitmap ? await createImageBitmap(cv) : cloneCanvas(cv));
-      onProgress(k + 1, total);
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    let frames;
+    // playing it through is what iPhone Safari handles best; jumping frame by frame is the backup
+    try {
+      if (location.hash === '#seekgrab') throw new Error('test'); // force the backup, for testing
+      frames = await grabByPlaying(v, cx, cv, dur, fps, total, onProgress);
+    } catch (e) {
+      frames = await grabBySeeking(v, cx, cv, dur, fps, total, onProgress);
     }
     V.frames.forEach(f => f.close && f.close());
     Object.assign(V, { frames, fps, dur, name: file.name || 'video' });
   } finally {
+    v.pause();
     v.removeAttribute('src'); v.load();
+    v.remove();
     URL.revokeObjectURL(url);
   }
 }

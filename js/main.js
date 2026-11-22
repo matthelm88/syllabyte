@@ -6,7 +6,7 @@ import { toMono, normalize, trim, findSlices, makeSliceBuffers } from './chopper
 import { generate, vary, extend, emptyPattern, emptyStep } from './generator.js';
 import { Sequencer, playChop } from './sequencer.js';
 import { renderLoop, renderLoopBuffer, shareWav, shareFile, isMobile } from './exporter.js';
-import { MODES as VID_MODES, hasVideo, loadVideo, patternTime, padTime, drawAt, recordVideo, recorderType } from './video.js';
+import { MODES as VID_MODES, hasVideo, loadVideo, patternTime, padTime, drawAt, recordVideo, recorderType } from './video.js?v=9';
 import * as store from './storage.js';
 import * as ui from './ui.js';
 import { VOICES, renderVoice } from './voices.js';
@@ -396,7 +396,7 @@ els.vidIn.addEventListener('change', async () => {
   setStatus('LOADING VIDEO…');
   try {
     await loadVideo(f, (d, n) => setStatus(`CUTTING VIDEO ${Math.round(d / n * 100)}%`));
-  } catch (e) { setStatus("CAN'T READ THAT VIDEO"); return; }
+  } catch (e) { setStatus('VIDEO FAILED: ' + ((e && e.message) || 'UNKNOWN')); return; }
   els.lblVid.classList.add('has');
   clearVidOut();
   showVid(true);
