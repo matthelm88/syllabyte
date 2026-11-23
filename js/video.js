@@ -1,5 +1,6 @@
 // video.js — the video layer. Each pad gets a piece of a video you load; whenever a pad plays, its piece plays.
-// The video is pre-cut into still frames when it loads, so playback and export never have to seek.
+// The video is pre-cut into still frames when it loads (720×1280 JPEGs, so they stay sharp but light on memory),
+// so playback and export never have to seek.
 //
 // Modes (how a pad's audio chop picks its stretch of video):
 //   TRIM    — video cut at the same points as the audio, normal speed (extra video past the audio's end is unused)
@@ -10,11 +11,13 @@ import { holdSteps } from './sequencer.js';
 
 export const MODES = ['trim', 'stretch', 'warp'];
 
-const FRAME_W = 360, FRAME_H = 640;   // cached frame size (9:16, cropped to fill)
-const MAX_FRAMES = 180, MAX_FPS = 30;
+const FRAME_W = 720, FRAME_H = 1280;  // stored frame size (9:16, cropped to fill)
+const MAX_FRAMES = 600, MAX_FPS = 30;  // full 30 fps for clips up to 20 s
+const JPEG_Q = 0.9;
+const OUT_W = 1080, OUT_H = 1920, OUT_FPS = 30, OUT_BITRATE = 12_000_000; // Reels size
 
 export const V = {
-  frames: [],      // ImageBitmaps / canvases
+  frames: [],      // <img> elements holding JPEG frames
   fps: 0,
   dur: 0,          // video length in seconds
   name: '',
@@ -59,56 +62,89 @@ function isBlank(cx) {
   return max - min < 6;
 }
 
-const snap = cv => (window.createImageBitmap ? createImageBitmap(cv) : Promise.resolve(cloneCanvas(cv)));
-
-// backup method: jump to each frame time and grab it
-async function grabBySeeking(v, cx, cv, dur, fps, total, onProgress) {
-  const frames = [];
-  let blanks = 0;
-  for (let k = 0; k < total; k++) {
-    v.currentTime = Math.min(dur - 0.001, (k + 0.5) / fps);
-    await once(v, 'seeked', 3000, 'SEEK');
-    await framePainted(v);
-    cx.fillStyle = '#000'; cx.fillRect(0, 0, FRAME_W, FRAME_H);
-    drawCover(cx, v, v.videoWidth, v.videoHeight, FRAME_W, FRAME_H);
-    if (k < 6 && isBlank(cx)) blanks++;
-    if (k === 5 && blanks === 6) throw new Error('BLANK');   // Safari isn't giving frames this way
-    frames.push(await snap(cv));
-    onProgress(k + 1, total);
-  }
-  return frames;
+// a canvas snapshot as a JPEG-backed <img>. toBlob copies the canvas when called, so the canvas can be redrawn at once.
+function snapJpeg(cv) {
+  return new Promise((res, rej) => {
+    cv.toBlob(blob => {
+      if (!blob) { rej(new Error('NO JPEG')); return; }
+      const img = new Image();
+      img.onload = () => res(img);
+      img.onerror = () => rej(new Error('BAD JPEG'));
+      img.src = URL.createObjectURL(blob);
+    }, 'image/jpeg', JPEG_Q);
+  });
 }
 
-// main method: play the video (muted) and grab frames as they go by; takes as long as the clip
-async function grabByPlaying(v, cx, cv, dur, fps, total, onProgress) {
-  const slots = new Array(total).fill(null);
+function drawFrame(cx, v) {
+  cx.fillStyle = '#000'; cx.fillRect(0, 0, FRAME_W, FRAME_H);
+  drawCover(cx, v, v.videoWidth, v.videoHeight, FRAME_W, FRAME_H);
+}
+
+// main method: play the video (muted) and grab frames as they go by. Saving a sharp frame takes a moment, so when
+// too many are waiting the video pauses until they catch up, which means a busy phone doesn't skip frames.
+// Fills only empty slots, so a second, slower pass can catch anything missed.
+async function playPass(v, cx, cv, dur, fps, slots, rate, onProgress) {
+  const total = slots.length, pending = new Set();
+  const HIGH = 6, LOW = 2;
+  let held = false, done = false;
   v.currentTime = 0;
   try { await once(v, 'seeked', 2000, 'SEEK'); } catch (e) { /* already at 0 */ }
   v.loop = false;
+  v.playbackRate = rate;
   await v.play();
   await new Promise(res => {
-    const give = setTimeout(res, (dur + 5) * 1000);
-    const grab = async (now, meta) => {
-      const t = meta && meta.mediaTime != null ? meta.mediaTime : v.currentTime;
-      const k = Math.min(total - 1, Math.floor(t * fps));
-      if (!slots[k]) {
-        cx.fillStyle = '#000'; cx.fillRect(0, 0, FRAME_W, FRAME_H);
-        drawCover(cx, v, v.videoWidth, v.videoHeight, FRAME_W, FRAME_H);
-        slots[k] = await snap(cv);
-        onProgress(slots.filter(Boolean).length, total);
+    let give = setTimeout(finish, (dur / rate + 20) * 1000);
+    function finish() { if (done) return; done = true; clearTimeout(give); res(); }
+    const next = () => (v.requestVideoFrameCallback ? v.requestVideoFrameCallback(grab) : requestAnimationFrame(() => grab()));
+    const resumeIfReady = () => {
+      if (held && pending.size <= LOW && !done) {
+        held = false;
+        clearTimeout(give); give = setTimeout(finish, (Math.max(0, dur - v.currentTime) / rate + 20) * 1000);
+        v.play().catch(() => {});
       }
-      if (v.ended || v.currentTime >= dur - 0.02) { clearTimeout(give); res(); return; }
-      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(grab); else requestAnimationFrame(() => grab());
     };
-    v.addEventListener('ended', () => { clearTimeout(give); res(); }, { once: true });
-    if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(grab); else requestAnimationFrame(() => grab());
+    const grab = (now, meta) => {
+      if (done) return;
+      const t = meta && meta.mediaTime != null ? meta.mediaTime : v.currentTime;
+      // +0.02 so a frame stamped exactly k/fps (often a hair under, in floating point) lands in slot k, not k-1
+      const k = Math.min(total - 1, Math.floor(t * fps + 0.02));
+      if (!slots[k]) {
+        drawFrame(cx, v);
+        slots[k] = 'busy';
+        const job = snapJpeg(cv).then(img => { slots[k] = img; }, () => { slots[k] = null; })
+          .finally(() => { pending.delete(job); onProgress(slots.filter(f => f && f !== 'busy').length, total); resumeIfReady(); });
+        pending.add(job);
+        if (pending.size >= HIGH && !held) { held = true; v.pause(); }
+      }
+      if (v.ended || v.currentTime >= dur - 0.02) { finish(); return; }
+      next();
+    };
+    v.addEventListener('ended', finish, { once: true });
+    next();
   });
   v.pause();
-  // fill any gaps with the nearest earlier frame
-  let last = slots.find(Boolean);
-  if (!last) throw new Error('NO FRAMES');
-  return slots.map(f => (last = f || last));
+  v.playbackRate = 1;
+  await Promise.all([...pending]);
 }
+
+// backup method: jump to each missing frame and grab it
+async function seekPass(v, cx, cv, dur, fps, slots, onProgress) {
+  const total = slots.length;
+  let tried = 0, blanks = 0;
+  for (let k = 0; k < total; k++) {
+    if (slots[k]) continue;
+    v.currentTime = Math.min(dur - 0.001, (k + 0.5) / fps);
+    await once(v, 'seeked', 3000, 'SEEK');
+    await framePainted(v);
+    drawFrame(cx, v);
+    if (tried < 6 && isBlank(cx)) blanks++;
+    if (++tried === 6 && blanks === 6) throw new Error('BLANK');   // Safari isn't giving frames this way
+    slots[k] = await snapJpeg(cv);
+    onProgress(slots.filter(Boolean).length, total);
+  }
+}
+
+const missing = slots => slots.filter(f => !f).length;
 
 // loads a video file and cuts it into frames; onProgress(done, total)
 export async function loadVideo(file, onProgress = () => {}) {
@@ -133,15 +169,24 @@ export async function loadVideo(file, onProgress = () => {}) {
     const cv = document.createElement('canvas');
     cv.width = FRAME_W; cv.height = FRAME_H;
     const cx = cv.getContext('2d', { willReadFrequently: true });
-    let frames;
-    // playing it through is what iPhone Safari handles best; jumping frame by frame is the backup
-    try {
-      if (location.hash === '#seekgrab') throw new Error('test'); // force the backup, for testing
-      frames = await grabByPlaying(v, cx, cv, dur, fps, total, onProgress);
-    } catch (e) {
-      frames = await grabBySeeking(v, cx, cv, dur, fps, total, onProgress);
+    const slots = new Array(total).fill(null);
+    // play it through; if the phone missed frames, play again slower to fill just those; jump to any still missing
+    const forceSeek = location.hash === '#seekgrab'; // for testing the backup
+    if (!forceSeek) {
+      for (const rate of [1, 0.5]) {
+        try { await playPass(v, cx, cv, dur, fps, slots, rate, onProgress); } catch (e) { break; }
+        console.log(`[video] pass at ${rate}x: ${total - missing(slots)}/${total} frames`);
+        if (missing(slots) <= total * 0.02) break;
+      }
     }
-    V.frames.forEach(f => f.close && f.close());
+    if (missing(slots)) {
+      try { await seekPass(v, cx, cv, dur, fps, slots, onProgress); } catch (e) { if (!slots.some(Boolean)) throw e; }
+    }
+    // any frame still missing borrows its neighbour
+    let last = slots.find(Boolean);
+    if (!last) throw new Error('NO FRAMES');
+    const frames = slots.map(f => (last = f || last));
+    V.frames.forEach(img => { try { URL.revokeObjectURL(img.src); } catch (e) { /* ignore */ } });
     Object.assign(V, { frames, fps, dur, name: file.name || 'video' });
   } finally {
     v.pause();
@@ -149,13 +194,6 @@ export async function loadVideo(file, onProgress = () => {}) {
     v.remove();
     URL.revokeObjectURL(url);
   }
-}
-
-function cloneCanvas(src) {
-  const c = document.createElement('canvas');
-  c.width = src.width; c.height = src.height;
-  c.getContext('2d').drawImage(src, 0, 0);
-  return c;
 }
 
 // stretch of video (seconds) that pad `slice` uses
@@ -207,12 +245,13 @@ export function patternTime(S, mode, i, e) {
 // one pad on its own (pad taps)
 export function padTime(S, mode, slice, e) { return chopTime(S, mode, slice, e, 1, false); }
 
+const frameIndex = vt => Math.max(0, Math.min(V.frames.length - 1, Math.floor(vt * V.fps)));
+
 export function drawAt(ctx, w, h, vt) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, w, h);
   if (!hasVideo() || vt == null) return;
-  const k = Math.max(0, Math.min(V.frames.length - 1, Math.floor(vt * V.fps)));
-  ctx.drawImage(V.frames[k], 0, 0, w, h);
+  ctx.drawImage(V.frames[frameIndex(vt)], 0, 0, w, h);
 }
 
 // pick the best recording format this browser has; Safari gives MP4
@@ -222,44 +261,58 @@ export function recorderType() {
   return types.find(t => { try { return MediaRecorder.isTypeSupported(t); } catch (e) { return false; } }) || null;
 }
 
-// records the loop as a vertical 720×1280 video with the rendered audio, in real time.
-// audioBuf: AudioBuffer from renderLoopBuffer. onTick(fraction) for progress.
+// records the loop as a vertical 1080×1920 video with the rendered audio, in real time.
+// Frames are drawn on an exact 30 fps grid (and pushed with requestFrame where the browser has it) to keep timing even.
+// audioBuf: AudioBuffer from renderLoopBuffer. onTick(fraction, videoTime) for progress.
 export async function recordVideo(S, mode, ctx, audioBuf, onTick = () => {}) {
   const type = recorderType();
   if (!type) throw new Error('no recorder');
-  const W = 720, H = 1280;
+  const W = OUT_W, H = OUT_H;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const cx = cv.getContext('2d');
+  cx.imageSmoothingQuality = 'high';
   const stepDur = 60 / S.bpm / 4;
+  const dur = audioBuf.duration;
+  const timeAt = t => {
+    const k = Math.floor(t / stepDur);
+    const i = ((k % S.pattern.length) + S.pattern.length) % S.pattern.length;
+    return patternTime(S, mode, i, t - k * stepDur);
+  };
+  // decode every frame the export will show before recording starts, so drawing never stalls
+  const need = new Set();
+  for (let n = 0; n <= dur * OUT_FPS; n++) { const vt = timeAt(n / OUT_FPS); if (vt != null) need.add(frameIndex(vt)); }
+  await Promise.all([...need].map(k => (V.frames[k].decode ? V.frames[k].decode().catch(() => {}) : null)));
+
   const dest = ctx.createMediaStreamDestination();
   const src = ctx.createBufferSource();
   src.buffer = audioBuf;
   src.connect(dest);
   src.connect(ctx.destination); // so you hear it while it records
-  const stream = cv.captureStream(30);
+  let stream = cv.captureStream(0);
+  let track = stream.getVideoTracks()[0];
+  if (!track || typeof track.requestFrame !== 'function') { stream = cv.captureStream(OUT_FPS); track = null; }
   dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
-  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 192_000 });
+  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: OUT_BITRATE, audioBitsPerSecond: 192_000 });
   const chunks = [];
   rec.ondataavailable = ev => { if (ev.data && ev.data.size) chunks.push(ev.data); };
   const stopped = new Promise(res => { rec.onstop = res; });
 
-  let vt = null;
-  const frameAt = t => {
-    const k = Math.floor(t / stepDur);
-    const i = ((k % S.pattern.length) + S.pattern.length) % S.pattern.length;
-    vt = patternTime(S, mode, i, t - k * stepDur);
+  let vt = null, lastN = -1;
+  const show = n => {
+    vt = timeAt(Math.min(n / OUT_FPS, dur - 0.001));
     drawAt(cx, W, H, vt);
+    if (track) track.requestFrame();
   };
-  frameAt(0);
+  show(0);
   rec.start(250);
   const t0 = ctx.currentTime + 0.15;
   src.start(t0);
-  const dur = audioBuf.duration;
   await new Promise(res => {
     const loop = () => {
       const t = ctx.currentTime - t0;
-      frameAt(Math.max(0, Math.min(t, dur - 0.001)));
+      const n = Math.max(0, Math.floor(t * OUT_FPS));
+      if (n !== lastN) { lastN = n; show(n); }
       onTick(Math.max(0, Math.min(1, t / dur)), vt);
       if (t >= dur + 0.1) return res();
       requestAnimationFrame(loop);
